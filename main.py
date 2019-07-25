@@ -23,7 +23,7 @@ parser.add_argument('--imageSize', type=int, default=64, help='the height / widt
 parser.add_argument('--nz', type=int, default=10, help='size of the latent z vector')
 parser.add_argument('--ngf', type=int, default=64)
 parser.add_argument('--ndf', type=int, default=64)
-parser.add_argument('--niter', type=int, default=25, help='number of epochs to train for')
+parser.add_argument('--niter', type=int, default=10, help='number of epochs to train for')
 parser.add_argument('--lr', type=float, default=0.0002, help='learning rate, default=0.0002')
 parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam. default=0.5')
 parser.add_argument('--cuda', action='store_true', help='enables cuda')
@@ -203,7 +203,14 @@ criterion = nn.BCELoss()
 # to compare quality of generated samples over the same noise
 fixed_noise = torch.randn(opt.batchSize, nz, 1, 1, device=device) 
 
-# setup optimizer
+# soft labels initial values and decay rate
+real_bound = 0.3
+fake_bound = 0.3
+gamma = 1.1
+gamma_step = 1e-6
+gamma_min = 1.0 + 1e-6
+
+# optimizers
 optimizerD = optim.Adam(netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 optimizerG = optim.Adam(netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 
@@ -218,6 +225,10 @@ print("-------------------------------")
 
 for epoch in range(opt.niter):
     for i, data in enumerate(dataloader, 0):
+        
+        # update gamma for soft labels
+        gamma = max(gamma - gamma_step, gamma_min)
+        
         ############################
         # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
         ###########################
@@ -225,8 +236,11 @@ for epoch in range(opt.niter):
         netD.zero_grad()
         real_cpu = data[0].to(device)
         batch_size = real_cpu.size(0)
+              
         # soft real label
-        label = torch.FloatTensor(np.random.uniform(0.7, 1.2, batch_size)).to(device)
+        real_low = 1 - real_bound * gamma
+        real_high = 1 + real_bound * gamma
+        label = torch.FloatTensor(np.random.uniform(real_low, real_high, batch_size)).to(device)
 
         output = netD(real_cpu)
         errD_real = criterion(output, label)
@@ -237,7 +251,9 @@ for epoch in range(opt.niter):
         noise = torch.randn(batch_size, nz, 1, 1, device=device)
         fake = netG(noise)
         # soft fake label
-        label = torch.FloatTensor(np.random.uniform(0.0, 0.3, batch_size)).to(device)
+        fake_low = 0.0
+        fake_high = fake_bound * gamma + 1e-6 # upper bounded
+        label = torch.FloatTensor(np.random.uniform(fake_low, fake_high, batch_size)).to(device)
         output = netD(fake.detach())
         errD_fake = criterion(output, label)
         errD_fake.backward()
@@ -249,26 +265,27 @@ for epoch in range(opt.niter):
         # (2) Update G network: maximize log(D(G(z)))
         ###########################
         netG.zero_grad()
-        label = torch.FloatTensor(np.random.uniform(0.7, 1.2, batch_size)).to(device)
+        label = torch.FloatTensor(np.random.uniform(real_low, real_high, batch_size)).to(device)
         output = netD(fake)
         errG = criterion(output, label)
         errG.backward()
         D_G_z2 = output.mean().item()
         optimizerG.step()
 
-        if i % 10 == 0:
-            print('\r[{:d}/{:d}][{:d}/{:d}] Loss_D: {:.4f} Loss_G: {:.4f} D(x): {:.4f} D(G(z)): {:.4f} / {:.4f}'.format(epoch, opt.niter, i, len(dataloader),
-                 errD.item(), errG.item(), D_x, D_G_z1, D_G_z2),end="")
+        if i % 1 == 0:
+            print('\r[{:d}/{:d}][{:d}/{:d}] Loss_D: {:.4f} Loss_G: {:.4f} D(x): {:.4f} D(G(z)) (fake/real): {:.4f} / {:.4f} Gamma: {:.12f}'.format(epoch, opt.niter, i, len(dataloader),
+                 errD.item(), errG.item(), D_x, D_G_z1, D_G_z2, gamma),end="")
         
-        if i % 100 == 0:
-            vutils.save_image(real_cpu,
-                    '%s/real_samples.png' % opt.outf,
-                    normalize=True)
-            fake = netG(fixed_noise)
-            vutils.save_image(fake.detach(),
-                    '%s/fake_samples_epoch_%03d.png' % (opt.outf, epoch),
-                    normalize=True)
 
-    # do checkpointing
+    # generated epoch images (fixed input noise)
+    vutils.save_image(real_cpu,
+            '%s/real_samples.png' % opt.outf,
+            normalize=True)
+    fake = netG(fixed_noise)
+    vutils.save_image(fake.detach(),
+            '%s/fake_samples_epoch_%03d.png' % (opt.outf, epoch),
+            normalize=True)
+
+    # save checkpoints
     torch.save(netG.state_dict(), '%s/netG_epoch_%d.pth' % (opt.outf, epoch))
     torch.save(netD.state_dict(), '%s/netD_epoch_%d.pth' % (opt.outf, epoch))
