@@ -210,15 +210,15 @@ def gaussian_noise(inputs, mean=0, stddev=1):
     out = np.add(input_array, noise)
     return torch.from_numpy(out).cuda().float()
 
-noise_mean = 1.0
-noise_sd = 2.0 
+noise_mean = 0.0
+noise_sd = 0.1 
 noise_decay = 0.99999
 
 # soft labels initial values and decay rate
 real_bound = 0.3
 fake_bound = 0.3
 gamma = 1.1
-gamma_step = 1e-6
+gamma_step = 1e-5
 gamma_min = 1.0 + 1e-6
 
 # optimizers
@@ -308,5 +308,9 @@ for epoch in range(opt.niter):
             normalize=True)
 
     # save checkpoints
-    torch.save(netG.state_dict(), '%s/netG_epoch_%d.pth' % (opt.outf, epoch))
-    torch.save(netD.state_dict(), '%s/netD_epoch_%d.pth' % (opt.outf, epoch))
+    #torch.save(netG.state_dict(), '%s/netG_epoch_%d.pth' % (opt.outf, epoch))
+    #torch.save(netD.state_dict(), '%s/netD_epoch_%d.pth' % (opt.outf, epoch))
+
+# save final models
+torch.save(netG.state_dict(), '%s/netG_epoch_%d.pth' % (opt.outf, epoch))
+torch.save(netD.state_dict(), '%s/netD_epoch_%d.pth' % (opt.outf, epoch))
