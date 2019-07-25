@@ -24,7 +24,7 @@ parser.add_argument('--nz', type=int, default=100, help='size of the latent z ve
 parser.add_argument('--ngf', type=int, default=64)
 parser.add_argument('--ndf', type=int, default=64)
 parser.add_argument('--niter', type=int, default=30, help='number of epochs to train for')
-parser.add_argument('--lr', type=float, default=0.0001, help='learning rate, default=0.0001)
+parser.add_argument('--lr', type=float, default=0.0001, help='learning rate, default=0.0001')
 parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam. default=0.5')
 parser.add_argument('--cuda', action='store_true', help='enables cuda')
 parser.add_argument('--ngpu', type=int, default=1, help='number of GPUs to use')
@@ -238,6 +238,9 @@ print("-------------------------------")
 for epoch in range(opt.niter):
     for i, data in enumerate(dataloader, 0):
         
+        # dynamic batch size
+        batch_size = data[0].to(device).size(0)
+
         # update gamma for soft labels
         gamma = max(gamma - gamma_step, gamma_min)
 
@@ -246,8 +249,8 @@ for epoch in range(opt.niter):
         real_high = 1 + real_bound * gamma
         fake_low = 0.0
         fake_high = fake_bound * gamma + 1e-6 # upper bounded
-        real_label = torch.FloatTensor(np.random.uniform(real_low, real_high, opt.batchSize)).to(device)
-        fake_label = torch.FloatTensor(np.random.uniform(fake_low, fake_high, opt.batchSize)).to(device)
+        real_label = torch.FloatTensor(np.random.uniform(real_low, real_high, batch_size)).to(device)
+        fake_label = torch.FloatTensor(np.random.uniform(fake_low, fake_high, batch_size)).to(device)
         real_label_ = real_label
 
         # ocassionaly flip labels for discriminator
@@ -264,7 +267,6 @@ for epoch in range(opt.niter):
         # train with real
         netD.zero_grad()
         real_cpu = gaussian_noise(data[0].to(device), noise_mean, noise_sd)
-        batch_size = real_cpu.size(0)
         output = netD(real_cpu)
         errD_real = criterion(output, real_label)
         errD_real.backward()
