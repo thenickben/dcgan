@@ -20,11 +20,11 @@ parser.add_argument('--dataroot', default=str('./'), help='path to dataset')
 parser.add_argument('--workers', type=int, help='number of data loading workers', default=2)
 parser.add_argument('--batchSize', type=int, default=64, help='input batch size')
 parser.add_argument('--imageSize', type=int, default=64, help='the height / width of the input image to network')
-parser.add_argument('--nz', type=int, default=10, help='size of the latent z vector')
+parser.add_argument('--nz', type=int, default=100, help='size of the latent z vector')
 parser.add_argument('--ngf', type=int, default=64)
 parser.add_argument('--ndf', type=int, default=64)
-parser.add_argument('--niter', type=int, default=10, help='number of epochs to train for')
-parser.add_argument('--lr', type=float, default=0.0002, help='learning rate, default=0.0002')
+parser.add_argument('--niter', type=int, default=30, help='number of epochs to train for')
+parser.add_argument('--lr', type=float, default=0.0001, help='learning rate, default=0.0001)
 parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam. default=0.5')
 parser.add_argument('--cuda', action='store_true', help='enables cuda')
 parser.add_argument('--ngpu', type=int, default=1, help='number of GPUs to use')
@@ -203,6 +203,17 @@ criterion = nn.BCELoss()
 # to compare quality of generated samples over the same noise
 fixed_noise = torch.randn(opt.batchSize, nz, 1, 1, device=device) 
 
+# gaussian noise for inputs to discriminator
+def gaussian_noise(inputs, mean=0, stddev=1):
+    input_array = inputs.cpu().data.numpy()
+    noise = np.random.normal(loc=mean, scale=stddev, size=np.shape(input_array))
+    out = np.add(input_array, noise)
+    return torch.from_numpy(out).cuda().float()
+
+noise_mean = 1.0
+noise_sd = 2.0 
+noise_decay = 0.99999
+
 # soft labels initial values and decay rate
 real_bound = 0.3
 fake_bound = 0.3
@@ -213,6 +224,7 @@ gamma_min = 1.0 + 1e-6
 # optimizers
 optimizerD = optim.Adam(netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 optimizerG = optim.Adam(netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+
 
 #######################################
 # Training
@@ -228,34 +240,41 @@ for epoch in range(opt.niter):
         
         # update gamma for soft labels
         gamma = max(gamma - gamma_step, gamma_min)
+
+        # soft labels
+        real_low = 1 - real_bound * gamma
+        real_high = 1 + real_bound * gamma
+        fake_low = 0.0
+        fake_high = fake_bound * gamma + 1e-6 # upper bounded
+        real_label = torch.FloatTensor(np.random.uniform(real_low, real_high, opt.batchSize)).to(device)
+        fake_label = torch.FloatTensor(np.random.uniform(fake_low, fake_high, opt.batchSize)).to(device)
+        real_label_ = real_label
+
+        # ocassionaly flip labels for discriminator
+        if random.uniform(0,1) < 0.05:
+            fake_label, real_label = real_label, fake_label
+
+        # update gaussian noise parameters
+        noise_mean *= noise_decay
+        noise_sd *= noise_decay
         
         ############################
         # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
         ###########################
         # train with real
         netD.zero_grad()
-        real_cpu = data[0].to(device)
+        real_cpu = gaussian_noise(data[0].to(device), noise_mean, noise_sd)
         batch_size = real_cpu.size(0)
-              
-        # soft real label
-        real_low = 1 - real_bound * gamma
-        real_high = 1 + real_bound * gamma
-        label = torch.FloatTensor(np.random.uniform(real_low, real_high, batch_size)).to(device)
-
         output = netD(real_cpu)
-        errD_real = criterion(output, label)
+        errD_real = criterion(output, real_label)
         errD_real.backward()
         D_x = output.mean().item()
 
         # train with fake
         noise = torch.randn(batch_size, nz, 1, 1, device=device)
-        fake = netG(noise)
-        # soft fake label
-        fake_low = 0.0
-        fake_high = fake_bound * gamma + 1e-6 # upper bounded
-        label = torch.FloatTensor(np.random.uniform(fake_low, fake_high, batch_size)).to(device)
+        fake = netG(gaussian_noise(noise, noise_mean, noise_sd))
         output = netD(fake.detach())
-        errD_fake = criterion(output, label)
+        errD_fake = criterion(output, fake_label)
         errD_fake.backward()
         D_G_z1 = output.mean().item()
         errD = errD_real + errD_fake
@@ -265,14 +284,14 @@ for epoch in range(opt.niter):
         # (2) Update G network: maximize log(D(G(z)))
         ###########################
         netG.zero_grad()
-        label = torch.FloatTensor(np.random.uniform(real_low, real_high, batch_size)).to(device)
+        fake = netG(gaussian_noise(noise, noise_mean, noise_sd))
         output = netD(fake)
-        errG = criterion(output, label)
+        errG = criterion(output, real_label_)
         errG.backward()
         D_G_z2 = output.mean().item()
         optimizerG.step()
 
-        if i % 1 == 0:
+        if i % 20 == 0:
             print('\r[{:d}/{:d}][{:d}/{:d}] Loss_D: {:.4f} Loss_G: {:.4f} D(x): {:.4f} D(G(z)) (fake/real): {:.4f} / {:.4f} Gamma: {:.12f}'.format(epoch, opt.niter, i, len(dataloader),
                  errD.item(), errG.item(), D_x, D_G_z1, D_G_z2, gamma),end="")
         
